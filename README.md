@@ -1,12 +1,3 @@
-# EH-SurGS: Deformable Gaussian Splatting for Efficient and High-Fidelity Reconstruction of Surgical Scenes
-
-Official code implementation for [EH-SurGS](https://arxiv.org/abs/2501.01101), a Gaussian Splatting based framework for surgical scene reconstruction.
-
-<!--### [Project Page]() -->
-
-> [EH-SurGS: Deformable Gaussian Splatting for Efficient and High-Fidelity Reconstruction of Surgical Scenes](https://arxiv.org/abs/2501.01101)\
-> Jiwei Shan, Zeyu Cai, Cheng-Tai Hsieh, Shing Shin Cheng, Hesheng Wang\
-> ICRA2025, **Accept**
 
 
 ## Environment setup
@@ -16,9 +7,10 @@ Tested with NVIDIA RTX 4090 GPU.
 ```bash
 git clone https://github.com/IRMVLab/EH-SurGS.git
 cd EH-SurGS
-conda create -n EH-SurGS python=3.7 
+conda create -n EH-SurGS python=3.10
 conda activate EH-SurGS
 
+pip install torch==2.0.1 torchvision==0.15.2 torchaudio==2.0.2 --index-url https://download.pytorch.org/whl/cu118
 pip install -r requirements.txt
 pip install -e submodules/depth-diff-gaussian-rasterization
 pip install -e submodules/simple-knn
@@ -28,21 +20,33 @@ pip install -e submodules/simple-knn
 
 We use [EndoNeRF](https://github.com/med-air/EndoNeRF), [StereoMIS](https://zenodo.org/records/7727692) and processed [Hamlyn](https://github.com/UZ-SLAMLab/Endo-Depth-and-Motion) datasets to verify our method.
 
+To use the two available examples in [EndoNeRF](https://github.com/med-air/EndoNeRF) dataset. Please download the data via [this link](https://forms.gle/1VAqDJTEgZduD6157) and organize the data according to the [guideline](https://github.com/med-air/EndoNeRF.git).
+
+To use the [StereoMIS](https://zenodo.org/records/7727692) dataset, please follow this [github repo](https://github.com/aimi-lab/robust-pose-estimator) to preprocess the dataset. After that, run the provided script `stereomis2endonerf.py` to extract clips from the StereoMIS dataset and organize the depth, masks, images, intrinsic and extrinsic parameters in the same format as [EndoNeRF](https://github.com/med-air/EndoNeRF). In our implementation, we used [RAFT](https://github.com/princeton-vl/RAFT) to estimate the stereo depth for [StereoMIS](https://zenodo.org/records/7727692) clips. Following EndoNeRF dataset, this script only supports fixed-view settings.
+
 The data structure is as follows:
 
 ```
 data
 | - endonerf_full_datasets
-|   | - cutting
+|   | - cutting_tissues_twice
 |   |   | -  depth/
 |   |   | -  images/
 |   |   | -  masks/
 |   |   | -  pose_bounds.npy 
-|   | - pushing
-|   |   | -  depth/
-|   |   | -  images/
-|   |   | -  masks/
-|   |   | -  pose_bounds.npy 
+|   | - pushing_soft_tissues
+| - StereoMIS
+|   | - stereo_seq_1
+|   | - stereo_seq_2
+```
+## Scrpits
+
+```bash
+python stereomis2endonerf.py -d ../Datasets/StereoMIS/P3 -f $start $end
+```
+
+```bash
+bash run_pipeline.sh [train | render | metric | all] [dataset_path] [metric_param (option)]"
 ```
 
 ## Training
@@ -83,20 +87,3 @@ This repo borrows some source code from [EndoGaussian](https://github.com/yifliu
 
 Thanks to [EndoGaussian](https://github.com/yifliu3/EndoGaussian/tree/master) for their great and timely effort in releasing the framework adapting Gaussian Splatting into surgical scene.
 
-## Citation
-
-If you find this code useful for your research, please use the following BibTeX entries:
-
-```
-@article{shan2025deformable,
-      title={Deformable Gaussian Splatting for Efficient and High-Fidelity Reconstruction of Surgical Scenes},
-      author={Shan, Jiwei and Cai, Zeyu and Hsieh, Cheng-Tai and Cheng, Shing Shin and Wang, Hesheng},
-      journal={arXiv preprint arXiv:2501.01101},
-      year={2025}
-}
-
-```
-
-### Questions
-
-For further question about the code or paper, welcome to create an issue, or contact 'jiweishan@link.cuhk.edu.hk' or 'caizeyu1106@sjtu.edu.cn'

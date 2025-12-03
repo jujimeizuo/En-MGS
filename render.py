@@ -51,7 +51,7 @@ def render_set(model_path, name, iteration, views, gaussians, pipeline, backgrou
     deformation_mask = np.load("output/deformation_mask.npy")
     deformation_mask = torch.tensor(deformation_mask)
     for idx, view in enumerate(tqdm(views, desc="Rendering progress")):
-        stage = 'coarse' if no_fine else 'fine'
+        # stage = 'coarse' if no_fine else 'fine'
         rendering = render(view, gaussians, pipeline, background, adaptive_motion_hierarchy, mask = deformation_mask)
         render_depths.append(rendering["depth"].cpu())
         render_images.append(rendering["render"].cpu())
@@ -144,6 +144,54 @@ def render_sets(dataset : ModelParams, hyperparam, iteration : int, pipeline : P
             render_set(dataset.model_path, "test", scene.loaded_iter, scene.getTestCameras(), gaussians, pipeline, background, False, adaptive_motion_hierarchy, reconstruct=reconstruct_test, crop_size=20)
         if not skip_video:
             render_set(dataset.model_path,"video",scene.loaded_iter, scene.getVideoCameras(),gaussians,pipeline,background, False, adaptive_motion_hierarchy, render_test=True, reconstruct=reconstruct_video, crop_size=20)
+
+def reconstruct_point_cloud(images, masks, depths, camera_parameters, name, crop_left_size=0):
+    import cv2
+    import copy
+    output_frame_folder = os.path.join("reconstruct", name)
+    os.makedirs(output_frame_folder, exist_ok=True)
+    frames = np.arange(len(images))
+    # frames = [0]
+    focal_x, focal_y, width, height = camera_parameters
+    if crop_left_size > 0:
+        width = width - crop_left_size
+        height = height - crop_left_size//2
+    for i_frame in frames:
+        rgb_tensor = images[i_frame]
+        rgb_np = rgb_tensor.mul(255).add_(0.5).clamp_(0, 255).permute(1, 2, 0).contiguous().to("cpu").numpy()
+        depth_np = depths[i_frame].cpu().numpy()
+        if len(depth_np.shape) == 3:
+            depth_np = depth_np[0]
+        # depth_np = depth_np.squeeze(0)
+        if crop_left_size > 0:
+            rgb_np = rgb_np[:, crop_left_size:, :]
+            depth_np = depth_np[:, crop_left_size:]
+            rgb_np = rgb_np[:-crop_left_size//2, :, :]
+            depth_np = depth_np[:-crop_left_size//2, :]
+            
+        # mask = masks[i_frame]
+        # mask = mask.squeeze(0).cpu().numpy()
+        
+        rgb_new = copy.deepcopy(rgb_np)
+        # depth_np[mask == 0] =0
+        # rgb_new[mask ==0] = np.asarray([0,0,0]) 
+        depth_smoother = (32, 64, 32) # (128, 64, 64) #[24, 64, 32]
+        # print(depth_np.shape)
+        depth_np = cv2.bilateralFilter(depth_np, depth_smoother[0], depth_smoother[1], depth_smoother[2])
+        
+        close_depth = np.percentile(depth_np[depth_np!=0], 5)
+        inf_depth = np.percentile(depth_np, 95)
+        depth_np = np.clip(depth_np, close_depth, inf_depth)
+
+        rgb_im = o3d.geometry.Image(rgb_new.astype(np.uint8))
+        depth_im = o3d.geometry.Image(depth_np)
+        rgbd_image = o3d.geometry.RGBDImage.create_from_color_and_depth(rgb_im, depth_im, convert_rgb_to_intensity=False)
+        pcd = o3d.geometry.PointCloud.create_from_rgbd_image(
+            rgbd_image,
+            o3d.camera.PinholeCameraIntrinsic(int(width), int(height), focal_x, focal_y, width / 2, height / 2),
+            project_valid_depth_only=True
+        )
+        o3d.io.write_point_cloud(os.path.join(output_frame_folder, 'frame_{}.ply'.format(i_frame)), pcd)
 
 
 if __name__ == "__main__":

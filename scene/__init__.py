@@ -10,14 +10,11 @@
 #
 
 import os
-import random
-import json
 from utils.system_utils import searchForMaxIteration
 from scene.dataset_readers import sceneLoadTypeCallbacks
 from scene.deformation_model import GaussianModel
 from arguments import ModelParams
 from utils.camera_utils import cameraList_from_camInfos, camera_to_JSON
-from torch.utils.data import Dataset
 
 class Scene:
 
@@ -40,7 +37,7 @@ class Scene:
         
         if os.path.exists(os.path.join(args.source_path, "poses_bounds.npy")) and args.extra_mark == 'endonerf':
             scene_info = sceneLoadTypeCallbacks["endonerf"](args.source_path)
-            print("Found poses_bounds.py and extra marks with EndoNeRf")
+            print("Found poses_bounds.py and extra marks with EndoNeRF")
         elif os.path.exists(os.path.join(args.source_path, "point_cloud.obj")) or os.path.exists(os.path.join(args.source_path, "left_point_cloud.obj")):
             scene_info = sceneLoadTypeCallbacks["scared"](args.source_path, args.white_background, args.eval)
             print("Found point_cloud.obj, assuming SCARED data!")
@@ -59,8 +56,8 @@ class Scene:
         print("Loading Video Cameras")
         self.video_camera =  scene_info.video_cameras 
         
-        xyz_max = scene_info.point_cloud.points.max(axis=0)
-        xyz_min = scene_info.point_cloud.points.min(axis=0)
+        # xyz_max = scene_info.point_cloud.points.max(axis=0)
+        # xyz_min = scene_info.point_cloud.points.min(axis=0)
         # self.gaussians._deformation.deformation_net.grid.set_aabb(xyz_max,xyz_min)
         
         if self.loaded_iter:

@@ -29,15 +29,16 @@ run_train() {
     local OUTPUT_DIR=$2 # 这是动态生成的输出目录
     local DATASET_NAME=$3 # 这是从路径中提取的唯一标识符
 
+    # 确保输出目录存在
+    mkdir -p "$OUTPUT_BASE/$OUTPUT_DIR"
+
     echo "--- 🚀 任务: 训练 (${DATASET_NAME}) ---"
     
-    mkdir -p "$OUTPUT_DIR"
-
     {
         python train.py -s "$DATASET_PATH" \
             --expname "$OUTPUT_DIR" \
             --configs "$UNIFIED_CONFIG"
-    } 2>&1 | tee "output/$OUTPUT_DIR/log_train.log"
+    } 2>&1 | tee "$OUTPUT_BASE/$OUTPUT_DIR/log_train.log"
     
     if [ ${PIPESTATUS[0]} -eq 0 ]; then
         echo "✅ 训练 ${DATASET_NAME} 完成。"

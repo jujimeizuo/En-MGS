@@ -5,4 +5,5 @@ build
 diff_rasterization/diff_rast.egg-info
 diff_rasterization/dist
 simple_knn/simple_knn.egg-info
-output
+output*/
+rar.sh

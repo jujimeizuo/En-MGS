@@ -25,10 +25,10 @@ from argparse import ArgumentParser, Namespace
 from arguments import ModelParams, PipelineParams, OptimizationParams
 from arguments import FDMHiddenParams as ModelHiddenParams
 from utils.timer import Timer
-import torch.nn.functional as F
 from time import time
+# import torch.nn.functional as F
 # import lpips
-from utils.scene_utils import render_training_image
+# from utils.scene_utils import render_training_image
 
 to8b = lambda x: (255 * np.clip(x.cpu().numpy(), 0, 1)).astype(np.uint8)
 
@@ -64,8 +64,6 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
     final_iter = train_iter
     progress_bar = tqdm(range(first_iter, final_iter), desc="Training progress")
     first_iter += 1
-
-    video_cams = scene.getVideoCameras()
 
     if not viewpoint_stack:
         viewpoint_stack = scene.getTrainCameras()
@@ -410,7 +408,7 @@ if __name__ == "__main__":
     # torch.set_default_tensor_type('torch.FloatTensor')
     torch.cuda.empty_cache()
     parser = ArgumentParser(description="Training script parameters")
-    setup_seed(6666)
+    setup_seed(42)
     lp = ModelParams(parser)
     op = OptimizationParams(parser)
     pp = PipelineParams(parser)
