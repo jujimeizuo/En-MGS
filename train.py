@@ -202,7 +202,14 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
                 # Keep track of max radii in image-space for pruning
                 gaussians.max_radii2D[visibility_filter] = torch.max(gaussians.max_radii2D[visibility_filter],
                                                                      radii[visibility_filter])
-                gaussians.add_densification_stats(viewspace_point_tensor_grad, visibility_filter)
+                
+                # 获取变形掩码用于变形感知策略
+                deformation_mask = None
+                if adaptive_motion_hierarchy and hasattr(gaussians, '_deform_mask'):
+                    deformation_mask = gaussians._deform_mask
+                
+                # 使用变形感知的梯度统计
+                gaussians.add_densification_stats(viewspace_point_tensor_grad, visibility_filter, deformation_mask)
 
                 opacity_threshold = opt.opacity_threshold_fine_init - iteration * (
                             opt.opacity_threshold_fine_init - opt.opacity_threshold_fine_after) / (
@@ -213,16 +220,23 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
 
                 if iteration > opt.densify_from_iter and iteration % opt.densification_interval == 0:
                     size_threshold = 20 if iteration > opt.opacity_reset_interval else None
-                    gaussians.densify(densify_threshold, opacity_threshold, scene.cameras_extent, size_threshold)
+                    # 使用变形感知的密集化策略
+                    gaussians.densify(densify_threshold, opacity_threshold, scene.cameras_extent, size_threshold, 
+                                     deformation_mask, deformation_scale=1.5)
+                    # 密集化后重新评估变形掩码
+                    if adaptive_motion_hierarchy:
+                        gaussians.update_deform_mask_after_densification(deformation_threshold=0.05)
 
                 if iteration > opt.pruning_from_iter and iteration % opt.pruning_interval == 0:
                     size_threshold = 40 if iteration > opt.opacity_reset_interval else None
-                    #gaussians.prune(densify_threshold, opacity_threshold, scene.cameras_extent, size_threshold)
+                    # 使用变形感知的修剪策略
+                    # gaussians.prune(densify_threshold, opacity_threshold, scene.cameras_extent, size_threshold, deformation_mask)
 
                 if iteration % opt.opacity_reset_interval == 0 or (
                         dataset.white_background and iteration == opt.densify_from_iter):
                     print("reset opacity")
-                    gaussians.reset_opacity()
+                    # 使用变形感知的不透明度重置
+                    gaussians.reset_opacity(deformation_mask, deform_reset_factor=0.5)
 
             # Optimizer step
             if iteration < opt.iterations:
@@ -234,7 +248,9 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
                 torch.save((gaussians.capture(), iteration), scene.model_path + "/chkpnt" + str(iteration) + ".pth")
         
         if adaptive_motion_hierarchy == True:
-            if iteration % mask_upgrade_iter == 0 and iteration < 1000:
+            # 延长变形掩码更新周期到整个密集化阶段（而不是固定的1000次迭代）
+            max_mask_update_iter = opt.densify_until_iter if hasattr(opt, 'densify_until_iter') else 1000
+            if iteration % mask_upgrade_iter == 0 and iteration < max_mask_update_iter:
                 if iteration == 10:
                     last_Ll1 = Ll1
                 iter_fac = Ll1 / last_Ll1
@@ -342,11 +358,14 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
                 gaussians._deform_mask = deformation_mask
 
             padding_length = gaussians._xyz.shape[0] - deformation_mask.shape[0]
-            if padding_length != 0:
+            if padding_length > 0:
                 padding_mask = torch.full((padding_length,), True, dtype=torch.bool)
                 padding_mask = padding_mask.to("cuda:0")
                 deformation_mask = deformation_mask.to("cuda:0")
                 deformation_mask = torch.cat((deformation_mask, padding_mask), dim=0)
+                gaussians._deform_mask = deformation_mask
+            elif padding_length < 0:
+                deformation_mask = deformation_mask[:gaussians._xyz.shape[0]]
                 gaussians._deform_mask = deformation_mask
 
             deformation_mask = gaussians._deform_mask

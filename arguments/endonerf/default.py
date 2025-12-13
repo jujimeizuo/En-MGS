@@ -12,7 +12,11 @@ OptimizationParams = dict(
     percent_dense = 0.01,
     opacity_reset_interval = 3000,
     position_lr_max_steps = 4000,
-    prune_interval = 3000
+    prune_interval = 3000,
+    
+    densification_interval = 30,
+    densify_grad_threshold_fine_init = 0.00015,
+    pruning_interval = 50
 )
 
 ModelHiddenParams = dict(

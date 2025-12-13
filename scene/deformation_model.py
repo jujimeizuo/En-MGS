@@ -313,8 +313,45 @@ class GaussianModel:
         el = PlyElement.describe(elements, 'vertex')
         PlyData([el]).write(path)
         
-    def reset_opacity(self):
-        opacities_new = inverse_sigmoid(torch.min(self.get_opacity, torch.ones_like(self.get_opacity)*0.01))
+    def reset_opacity(self, deformation_mask=None, deform_reset_factor=0.5):
+        """
+        重置不透明度，支持变形感知策略
+        
+        Args:
+            deformation_mask: 变形掩码，如果提供则使用区域自适应策略
+            deform_reset_factor: 变形区域的不透明度重置因子（越小越激进）
+        """
+        if deformation_mask is not None and len(deformation_mask) > 0:
+            # 确保掩码长度匹配
+            if len(deformation_mask) > len(self._opacity):
+                deformation_mask = deformation_mask[:len(self._opacity)]
+            elif len(deformation_mask) < len(self._opacity):
+                padding = torch.zeros(len(self._opacity) - len(deformation_mask), 
+                                    dtype=torch.bool, device=deformation_mask.device)
+                deformation_mask = torch.cat([deformation_mask, padding])
+            
+            # 变形区域：更激进的重置
+            deform_opacities = self.get_opacity[deformation_mask]
+            deform_threshold = 0.01 * deform_reset_factor  # 默认0.005
+            deform_opacities_new = inverse_sigmoid(
+                torch.min(deform_opacities, torch.ones_like(deform_opacities) * deform_threshold)
+            )
+            
+            # 静态区域：保守的重置
+            static_mask = ~deformation_mask
+            static_opacities = self.get_opacity[static_mask]
+            static_opacities_new = inverse_sigmoid(
+                torch.min(static_opacities, torch.ones_like(static_opacities) * 0.01)
+            )
+            
+            # 合并
+            opacities_new = torch.zeros_like(self._opacity)
+            opacities_new[deformation_mask] = deform_opacities_new
+            opacities_new[static_mask] = static_opacities_new
+        else:
+            # 原有逻辑（全局重置）
+            opacities_new = inverse_sigmoid(torch.min(self.get_opacity, torch.ones_like(self.get_opacity)*0.01))
+        
         optimizable_tensors = self.replace_tensor_to_optimizer(opacities_new, "opacity")
         self._opacity = optimizable_tensors["opacity"]
     
@@ -416,13 +453,50 @@ class GaussianModel:
         self._deformation_accum = torch.zeros((self.get_xyz.shape[0], 3), device="cuda")
         self.denom = torch.zeros((self.get_xyz.shape[0], 1), device="cuda")
         self.max_radii2D = torch.zeros((self.get_xyz.shape[0]), device="cuda")
+    
+    def update_deform_mask_after_densification(self, deformation_threshold=0.05):
+        """
+        密集化后重新评估新点的变形掩码
+        检查新点的变形累积量，根据变形量决定是否标记为变形点
+        
+        Args:
+            deformation_threshold: 变形量阈值，超过此值则标记为变形点
+        """
+        if not hasattr(self, '_deformation_accum') or self._deformation_accum.shape[0] == 0:
+            return
+        
+        # 检查所有点的变形累积
+        deform_accum = self._deformation_accum.norm(dim=-1)
+        
+        # 如果变形量超过阈值，标记为变形点
+        should_deform = deform_accum > deformation_threshold
+        
+        # 更新变形掩码（只更新新点，保留原有掩码）
+        if len(should_deform) <= len(self._deform_mask):
+            # 对于新点，如果变形量足够大，则标记为变形点
+            # 这里采用"或"操作，保留原有掩码，同时添加新的变形点
+            self._deform_mask[:len(should_deform)] = self._deform_mask[:len(should_deform)] | should_deform
+            self._deformation_table[:len(should_deform)] = self._deformation_table[:len(should_deform)] | should_deform
 
-    def densify_and_split(self, grads, grad_threshold, scene_extent, N=2):
+    def densify_and_split(self, grads, grad_threshold, scene_extent, N=2, region_mask=None):
+        """
+        密集化：对梯度较大的点做 split。支持 region_mask 限制作用区域。
+        """
         n_init_points = self.get_xyz.shape[0]
-        # Extract points that satisfy the gradient condition
+        # 对齐 grads 长度到当前高斯数量
         padded_grad = torch.zeros((n_init_points), device="cuda")
-        padded_grad[:grads.shape[0]] = grads.squeeze()
+        use_len = min(grads.shape[0], n_init_points)
+        padded_grad[:use_len] = grads[:use_len].squeeze()
         selected_pts_mask = torch.where(padded_grad >= grad_threshold, True, False)
+        # 仅在指定区域内进行 densify
+        if region_mask is not None:
+            if region_mask.shape[0] != selected_pts_mask.shape[0]:
+                # 对齐长度
+                padded_region = torch.zeros_like(selected_pts_mask)
+                copy_len = min(region_mask.shape[0], selected_pts_mask.shape[0])
+                padded_region[:copy_len] = region_mask[:copy_len]
+                region_mask = padded_region
+            selected_pts_mask = torch.logical_and(selected_pts_mask, region_mask)
         selected_pts_mask = torch.logical_and(selected_pts_mask,
                                               torch.max(self.get_scaling, dim=1).values > self.percent_dense*scene_extent)
         if not selected_pts_mask.any():
@@ -445,9 +519,27 @@ class GaussianModel:
         prune_filter = torch.cat((selected_pts_mask, torch.zeros(N * selected_pts_mask.sum(), device="cuda", dtype=bool)))
         self.prune_points(prune_filter)
 
-    def densify_and_clone(self, grads, grad_threshold, scene_extent):
-        # Extract points that satisfy the gradient condition
-        selected_pts_mask = torch.where(torch.norm(grads, dim=-1) >= grad_threshold, True, False)
+    def densify_and_clone(self, grads, grad_threshold, scene_extent, region_mask=None):
+        """
+        密集化：对梯度较大的点做 clone。支持 region_mask 限制作用区域。
+        """
+        n_init_points = self.get_xyz.shape[0]
+        # 对齐 grads 长度到当前高斯数量
+        if grads.shape[0] != n_init_points:
+            grads_aligned = torch.zeros((n_init_points, grads.shape[1]), device=grads.device, dtype=grads.dtype)
+            use_len = min(grads.shape[0], n_init_points)
+            grads_aligned[:use_len] = grads[:use_len]
+        else:
+            grads_aligned = grads
+
+        selected_pts_mask = torch.where(torch.norm(grads_aligned, dim=-1) >= grad_threshold, True, False)
+        if region_mask is not None:
+            if region_mask.shape[0] != selected_pts_mask.shape[0]:
+                padded_region = torch.zeros_like(selected_pts_mask)
+                copy_len = min(region_mask.shape[0], selected_pts_mask.shape[0])
+                padded_region[:copy_len] = region_mask[:copy_len]
+                region_mask = padded_region
+            selected_pts_mask = torch.logical_and(selected_pts_mask, region_mask)
         selected_pts_mask = torch.logical_and(selected_pts_mask,
                                               torch.max(self.get_scaling, dim=1).values <= self.percent_dense*scene_extent)
         
@@ -462,22 +554,91 @@ class GaussianModel:
         new_deform_mask = self._deform_mask[selected_pts_mask]
         self.densification_postfix(new_xyz, new_features_dc, new_features_rest, new_opacities, new_scaling, new_rotation,new_coefs, new_deformation_table, new_deform_mask)
     
-    def prune(self, max_grad, min_opacity, extent, max_screen_size):
+    def prune(self, max_grad, min_opacity, extent, max_screen_size, deformation_mask=None):
+        """
+        修剪高斯点，支持变形感知策略
+        
+        Args:
+            max_grad: 最大梯度阈值
+            min_opacity: 最小不透明度阈值
+            extent: 场景范围
+            max_screen_size: 最大屏幕尺寸
+            deformation_mask: 变形掩码，如果提供则使用变形感知策略
+        """
         prune_mask = (self.get_opacity < min_opacity).squeeze()
         if max_screen_size:
             big_points_vs = self.max_radii2D > max_screen_size
-            # big_points_ws = self.get_scaling.max(dim=1).values > 0.1 * extent
             prune_mask = torch.logical_or(prune_mask, big_points_vs)
-            # prune_mask = torch.logical_or(torch.logical_or(prune_mask, big_points_vs), big_points_ws)
+        
+        # 变形感知的修剪：检查变形异常的点
+        if deformation_mask is not None and hasattr(self, '_deformation_accum'):
+            # 确保掩码长度匹配
+            if len(deformation_mask) <= len(self._deformation_accum):
+                deform_accum = self._deformation_accum[:len(deformation_mask)].norm(dim=-1)
+                # 移除变形量异常的点（过大：可能错误，过小：可能不需要变形）
+                # 但只对非变形区域应用过小检查，变形区域允许小变形
+                abnormal_deform_large = deform_accum > 0.5  # 变形过大
+                abnormal_deform_small = (deform_accum < 0.001) & (~deformation_mask[:len(deform_accum)])  # 非变形区域变形过小
+                abnormal_deform = abnormal_deform_large | abnormal_deform_small
+                
+                # 确保长度匹配
+                if len(abnormal_deform) <= len(prune_mask):
+                    prune_mask[:len(abnormal_deform)] = torch.logical_or(
+                        prune_mask[:len(abnormal_deform)], abnormal_deform
+                    )
+        
         self.prune_points(prune_mask)
         torch.cuda.empty_cache()
 
-    def densify(self, max_grad, min_opacity, extent, max_screen_size):
+    def densify(self, max_grad, min_opacity, extent, max_screen_size, deformation_mask=None, deformation_scale=1.5):
+        """
+        密集化高斯点，支持变形感知策略
+        
+        Args:
+            max_grad: 最大梯度阈值
+            min_opacity: 最小不透明度阈值
+            extent: 场景范围
+            max_screen_size: 最大屏幕尺寸
+            deformation_mask: 变形掩码，如果提供则使用变形感知策略
+            deformation_scale: 变形区域的梯度阈值缩放因子（越小越容易密集化）
+        """
         grads = self.xyz_gradient_accum / self.denom
         grads[grads.isnan()] = 0.0
+        # 对齐 grads 长度到当前高斯数量，避免与 self.get_scaling 等不一致
+        n_init_points = self.get_xyz.shape[0]
+        if grads.shape[0] != n_init_points:
+            grads_aligned = torch.zeros((n_init_points, grads.shape[1]), device=grads.device, dtype=grads.dtype)
+            use_len = min(grads.shape[0], n_init_points)
+            grads_aligned[:use_len] = grads[:use_len]
+            grads = grads_aligned
 
-        self.densify_and_clone(grads, max_grad, extent)
-        self.densify_and_split(grads, max_grad, extent)
+        if deformation_mask is not None and len(deformation_mask) > 0:
+            # 变形感知的密集化策略
+            if len(deformation_mask) > len(grads):
+                deformation_mask = deformation_mask[:len(grads)]
+            elif len(deformation_mask) < len(grads):
+                padding = torch.zeros(len(grads) - len(deformation_mask), dtype=torch.bool, device=deformation_mask.device)
+                deformation_mask = torch.cat([deformation_mask, padding])
+            
+            deform_grad_threshold = max_grad / deformation_scale
+            static_grad_threshold = max_grad
+            
+            deform_mask = deformation_mask[:len(grads)]
+            static_mask = ~deform_mask
+            
+            # 变形区域密集化（更激进）——使用 region_mask 保持长度一致
+            if deform_mask.any():
+                self.densify_and_clone(grads, deform_grad_threshold, extent, region_mask=deform_mask)
+                self.densify_and_split(grads, deform_grad_threshold, extent, region_mask=deform_mask)
+            
+            # 静态区域密集化（保守）
+            if static_mask.any():
+                self.densify_and_clone(grads, static_grad_threshold, extent, region_mask=static_mask)
+                self.densify_and_split(grads, static_grad_threshold, extent, region_mask=static_mask)
+        else:
+            # 原有逻辑（无变形感知）
+            self.densify_and_clone(grads, max_grad, extent)
+            self.densify_and_split(grads, max_grad, extent)
     
     def standard_constaint(self):
         
@@ -492,9 +653,33 @@ class GaussianModel:
         scaling_erorr = (scales_deform - scales)**2
         return position_error.mean() + rotation_error.mean() + scaling_erorr.mean()
 
-    def add_densification_stats(self, viewspace_point_tensor, update_filter):
+    def add_densification_stats(self, viewspace_point_tensor, update_filter, deformation_mask=None, deform_weight=1.2):
+        """
+        添加密集化统计信息，支持变形感知策略
+        
+        Args:
+            viewspace_point_tensor: 视图空间点张量
+            update_filter: 更新过滤器
+            deformation_mask: 变形掩码，如果提供则对变形区域加权
+            deform_weight: 变形区域的梯度权重
+        """
         self.xyz_gradient_accum[update_filter] += torch.norm(viewspace_point_tensor[update_filter,:2], dim=-1, keepdim=True)
         self.denom[update_filter] += 1
+        
+        # 对变形区域进行额外加权
+        if deformation_mask is not None and len(deformation_mask) > 0:
+            # 确保掩码长度匹配
+            if len(deformation_mask) > len(update_filter):
+                deformation_mask = deformation_mask[:len(update_filter)]
+            elif len(deformation_mask) < len(update_filter):
+                padding = torch.zeros(len(update_filter) - len(deformation_mask), 
+                                    dtype=torch.bool, device=deformation_mask.device)
+                deformation_mask = torch.cat([deformation_mask, padding])
+            
+            # 变形区域的梯度需要更高权重
+            deform_filter = update_filter & deformation_mask
+            if deform_filter.any() and len(self.xyz_gradient_accum) > len(deform_filter):
+                self.xyz_gradient_accum[deform_filter] *= deform_weight
 
     @torch.no_grad()
     def update_deformation_table(self,threshold):
