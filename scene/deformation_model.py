@@ -687,14 +687,59 @@ class GaussianModel:
         self._deformation_table = torch.gt(self._deformation_accum.max(dim=-1).values/100,threshold)
         
     def gaussian_deformation(self, time, deformation_point, num_gaussians, ch_num=8, basis_num=20):
+        """
+        多尺度/分层时间基函数：
+        - 将原来的 basis_num 个一维 Gaussian 基函数拆成「粗尺度 + 细尺度」两组
+        - 粗尺度：更大的时间支撑（std 更大），建模整体/低频形变
+        - 细尺度：更小的时间支撑（std 更小），建模局部/高频残差
+
+        仍保持对外接口不变，只在内部对 std 做分组缩放。
+        """
 
         num_points = len(self._xyz)
         coefficients = self._coefs.reshape(num_points, ch_num, 3, basis_num).contiguous()
         coefficients = coefficients[deformation_point, :, :, :]
         weights, means, std_devs = torch.chunk(coefficients, 3, -2)
-        exponent = (time - means) ** 2 / (std_devs ** 2 + 1e-4)
-        gaussians = torch.exp(-exponent ** 2)
-        return (gaussians * weights).sum(-1).squeeze()
+
+        # --- 多尺度划分：前半为粗尺度，后半为细尺度 ---
+        # 若为奇数，粗尺度多一个基函数
+        coarse_basis_num = basis_num // 2 + basis_num % 2
+        fine_basis_num = basis_num - coarse_basis_num
+
+        # 避免极端情况下 fine_basis_num 为 0（很小的 basis_num）
+        if fine_basis_num == 0:
+            exponent = (time - means) ** 2 / (std_devs ** 2 + 1e-4)
+            gaussians = torch.exp(-exponent ** 2)
+            return (gaussians * weights).sum(-1).squeeze()
+
+        weights_coarse = weights[..., :coarse_basis_num]
+        means_coarse = means[..., :coarse_basis_num]
+        std_coarse = std_devs[..., :coarse_basis_num]
+
+        weights_fine = weights[..., coarse_basis_num:]
+        means_fine = means[..., coarse_basis_num:]
+        std_fine = std_devs[..., coarse_basis_num:]
+
+        # --- 不同尺度的 std 缩放，形成明显的支撑差异 ---
+        # 粗尺度：时间范围更大（std 放大）
+        # 细尺度：时间范围更小（std 缩小），专注局部细节
+        coarse_scale = 3.5
+        fine_scale = 0.5
+
+        std_coarse = std_coarse * coarse_scale
+        std_fine = std_fine * fine_scale
+
+        exponent_coarse = (time - means_coarse) ** 2 / (std_coarse ** 2 + 1e-4)
+        exponent_fine = (time - means_fine) ** 2 / (std_fine ** 2 + 1e-4)
+
+        gaussians_coarse = torch.exp(-exponent_coarse ** 2)
+        gaussians_fine = torch.exp(-exponent_fine ** 2)
+
+        deform_coarse = (gaussians_coarse * weights_coarse).sum(-1)
+        deform_fine = (gaussians_fine * weights_fine).sum(-1)
+
+        # 可以在这里添加额外的层级权重（目前设为 1 保持行为接近原版）
+        return (deform_coarse + deform_fine).squeeze()
 
 
     def apply_deformations(

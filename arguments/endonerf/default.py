@@ -20,6 +20,6 @@ OptimizationParams = dict(
 )
 
 ModelHiddenParams = dict(
-    curve_num = 14,
+    curve_num = 20,
     ch_num = 8, 
     init_param = 0.01, )
