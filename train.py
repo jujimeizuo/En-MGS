@@ -12,7 +12,7 @@ import random
 import os
 import torch
 from random import randint
-from utils.loss_utils import l1_loss
+from utils.loss_utils import l1_loss, TV_loss
 from gaussian_renderer import render_flow_train as render
 
 import sys
@@ -168,7 +168,9 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
 
         psnr_ = psnr(image_tensor, gt_image_tensor, mask_tensor).mean().double()
         
-        loss = Ll1 + depth_loss
+        img_tvloss = TV_loss(image_tensor)
+
+        loss = Ll1 + depth_loss + 0.1 * img_tvloss
 
         loss.backward()
         viewspace_point_tensor_grad = torch.zeros_like(viewspace_point_tensor)

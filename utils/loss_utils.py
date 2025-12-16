@@ -15,7 +15,7 @@ from torch.autograd import Variable
 from math import exp
 
 
-def TV_loss(x, mask):
+def TV_loss(x):
     B, C, H, W = x.shape
     tv_h = torch.abs(x[:,:,1:,:] - x[:,:,:-1,:]).sum()
     tv_w = torch.abs(x[:,:,:,1:] - x[:,:,:,:-1]).sum()
