@@ -313,48 +313,11 @@ class GaussianModel:
         el = PlyElement.describe(elements, 'vertex')
         PlyData([el]).write(path)
         
-    def reset_opacity(self, deformation_mask=None, deform_reset_factor=0.5):
-        """
-        重置不透明度，支持变形感知策略
-        
-        Args:
-            deformation_mask: 变形掩码，如果提供则使用区域自适应策略
-            deform_reset_factor: 变形区域的不透明度重置因子（越小越激进）
-        """
-        if deformation_mask is not None and len(deformation_mask) > 0:
-            # 确保掩码长度匹配
-            if len(deformation_mask) > len(self._opacity):
-                deformation_mask = deformation_mask[:len(self._opacity)]
-            elif len(deformation_mask) < len(self._opacity):
-                padding = torch.zeros(len(self._opacity) - len(deformation_mask), 
-                                    dtype=torch.bool, device=deformation_mask.device)
-                deformation_mask = torch.cat([deformation_mask, padding])
-            
-            # 变形区域：更激进的重置
-            deform_opacities = self.get_opacity[deformation_mask]
-            deform_threshold = 0.01 * deform_reset_factor  # 默认0.005
-            deform_opacities_new = inverse_sigmoid(
-                torch.min(deform_opacities, torch.ones_like(deform_opacities) * deform_threshold)
-            )
-            
-            # 静态区域：保守的重置
-            static_mask = ~deformation_mask
-            static_opacities = self.get_opacity[static_mask]
-            static_opacities_new = inverse_sigmoid(
-                torch.min(static_opacities, torch.ones_like(static_opacities) * 0.01)
-            )
-            
-            # 合并
-            opacities_new = torch.zeros_like(self._opacity)
-            opacities_new[deformation_mask] = deform_opacities_new
-            opacities_new[static_mask] = static_opacities_new
-        else:
-            # 原有逻辑（全局重置）
-            opacities_new = inverse_sigmoid(torch.min(self.get_opacity, torch.ones_like(self.get_opacity)*0.01))
-        
+    def reset_opacity(self):
+        opacities_new = inverse_sigmoid(torch.min(self.get_opacity, torch.ones_like(self.get_opacity)*0.01))
         optimizable_tensors = self.replace_tensor_to_optimizer(opacities_new, "opacity")
         self._opacity = optimizable_tensors["opacity"]
-    
+
     def replace_tensor_to_optimizer(self, tensor, name):
         optimizable_tensors = {}
         for group in self.optimizer.param_groups:

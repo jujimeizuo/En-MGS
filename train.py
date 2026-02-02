@@ -237,8 +237,7 @@ def scene_reconstruction(dataset, opt, hyper, pipe, testing_iterations, saving_i
                 if iteration % opt.opacity_reset_interval == 0 or (
                         dataset.white_background and iteration == opt.densify_from_iter):
                     print("reset opacity")
-                    # 使用变形感知的不透明度重置
-                    gaussians.reset_opacity(deformation_mask, deform_reset_factor=0.5)
+                    gaussians.reset_opacity()
 
             # Optimizer step
             if iteration < opt.iterations:
