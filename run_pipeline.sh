@@ -156,12 +156,8 @@ if [ "$#" -eq 1 ]; then
     PRESET_DATASETS=(
         "../Datasets/EndoNeRF/cutting_tissues_twice"
         "../Datasets/EndoNeRF/pulling_soft_tissues"
-        "../Datasets/StereoMIS/P2_7/stereo_P2_7_550_936"
-        "../Datasets/StereoMIS/P3/stereo_P3_10060_10360"
-        "../Datasets/StereoMIS/P3/stereo_P3_13100_13367"
-        "../Datasets/StereoMIS/P3/stereo_P3_15100_15468"
-        "../Datasets/StereoMIS/P2_6/stereo_P2_6_11634_11801"
         "../Datasets/StereoMIS/P2_6/stereo_P2_6_9750_9900"
+        "../Datasets/StereoMIS/P3/stereo_P3_10060_10360"
     )
 
     echo "✅ 进入批量模式，预设数据集数量: ${#PRESET_DATASETS[@]}"

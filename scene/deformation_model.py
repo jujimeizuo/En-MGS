@@ -687,7 +687,7 @@ class GaussianModel:
         # 粗尺度：时间范围更大（std 放大）
         # 细尺度：时间范围更小（std 缩小），专注局部细节
         coarse_scale = 3.5
-        fine_scale = 0.5
+        fine_scale = 1.5
 
         std_coarse = std_coarse * coarse_scale
         std_fine = std_fine * fine_scale
